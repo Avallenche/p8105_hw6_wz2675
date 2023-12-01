@@ -1,0 +1,131 @@
+---
+title: "p8105_hw6_wz2675"
+author: "Wenyu Zhang"
+date: "2023-12-01"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(modelr)
+library(purrr)
+library(mgcv)
+set.seed(1)
+```
+
+# Problem 2
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2022-01-01",
+    date_max = "2022-12-31") |>
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) |>
+  select(name, id, everything())
+```
+
+```{r}
+r_squared_boot = 
+  weather_df |> 
+  select(prcp, tmax, tmin) |> 
+  bootstrap(n = 5000) |> 
+  mutate(
+    models = map(strap, \(df) lm(tmax ~ prcp + tmin, data = df)),
+    results = map(models, broom::glance)) |> 
+  select(-strap, -models) |> 
+  unnest(results)
+
+r_squared_boot |> 
+  ggplot(aes(x = r.squared)) + geom_density()
+
+quantile(r_squared_boot$r.squared, c(0.025, 0.975), na.rm = TRUE)
+```
+
+```{r}
+beta_log_boot = 
+  weather_df |> 
+  select(prcp, tmax, tmin) |> 
+  bootstrap(n = 5000) |> 
+  mutate(
+    models = map(strap, \(df) lm(tmax ~ prcp + tmin, data = df)),
+    results = map(models, broom::tidy)) |> 
+  select(-strap, -models) |> 
+  unnest(results) |> 
+  select(.id, term, estimate) |> 
+  pivot_wider(names_from = term, values_from = estimate) |> 
+  mutate(log_beta1_beta2 = log(prcp * tmin))
+
+beta_log_boot |> 
+  ggplot(aes(x = log_beta1_beta2)) + geom_density()
+
+quantile(beta_log_boot$log_beta1_beta2, c(0.025, 0.975), na.rm = TRUE)
+```
+
+# Problem 3
+```{r}
+birthweight = 
+  read_csv("./data/birthweight.csv") |> 
+  mutate(babysex = as.factor(ifelse(babysex == 1, "male", "female")),
+         frace = as.factor(case_when(
+           frace == 1 ~ "White",
+           frace == 2 ~ "Black",
+           frace == 3 ~ "Asian",
+           frace == 4 ~ "Puerto Rican",
+           frace == 8 ~ "Other",
+           frace == 9 ~ "Unknown")),
+         malform = as.factor(ifelse(malform == 0, "absent", "present")),
+         mrace = as.factor(case_when(
+           mrace == 1 ~ "White",
+           mrace == 2 ~ "Black",
+           mrace == 3 ~ "Asian",
+           mrace == 4 ~ "Puerto Rican",
+           mrace == 8 ~ "Other"
+         ))
+   )
+```
+
+```{r}
+my_lm = lm(bwt ~ fincome * menarche + fincome * momage + menarche * momage, data = birthweight)
+my_lm |> 
+  broom::tidy() |> 
+  select(term, estimate,p.value) |> 
+  knitr::kable(digit = 3)
+birthweight |> 
+  add_residuals(my_lm) |> 
+  ggplot(aes(x = bwt, y = resid)) + geom_point()
+```
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight, 100) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+cv_df = 
+  cv_df |> 
+  mutate(
+    linear_mod = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    pwl_mod = map(train, \(df) lm(bwt ~ bhead * blength + bhead * babysex + blength * babysex, data = df)),
+    mypwl_mod = map(train, \(df) lm(bwt ~ fincome * menarche + fincome * momage + menarche * momage, data = df))) |> 
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, \(mod,df) rmse(model = mod, data = df)),
+    rmse_pwl = map2_dbl(pwl_mod, test, \(mod,df) rmse(model = mod, data = df)),
+    rmse_mypwl = map2_dbl(mypwl_mod, test, \(mod,df) rmse(model = mod, data = df))
+  )
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+
