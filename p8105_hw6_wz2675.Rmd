@@ -13,6 +13,69 @@ library(purrr)
 library(mgcv)
 set.seed(1)
 ```
+# Problem 1
+```{r}
+homicide_df = 
+  read_csv("data/homicide-data.csv", na = c("", "NA", "Unknown")) |> 
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    victim_age = as.numeric(victim_age),
+    resolution = case_when(
+      disposition == "Closed without arrest" ~ 0,
+      disposition == "Open/No arrest"        ~ 0,
+      disposition == "Closed by arrest"      ~ 1)
+  ) |> 
+  filter(victim_race %in% c("White", "Black")) |> 
+  filter(!(city_state %in% c("Tulsa, AL", "Dallas, TX", "Phoenix, AZ", "Kansas City, MO"))) |> 
+  select(city_state, resolution, victim_age, victim_sex, victim_race)
+```
+
+```{r}
+baltimore_glm = 
+  filter(homicide_df, city_state == "Baltimore, MD") |> 
+  glm(resolution ~ victim_age + victim_sex + victim_race, family = binomial(), data = _)
+
+baltimore_glm |> 
+  broom::tidy() |> 
+  mutate(
+    OR = exp(estimate), 
+    OR_CI_upper = exp(estimate + 1.96 * std.error),
+    OR_CI_lower = exp(estimate - 1.96 * std.error)) |> 
+  filter(term == "victim_sexMale") |> 
+  select(OR, OR_CI_lower, OR_CI_upper) |>
+  knitr::kable(digits = 3)
+```
+
+```{r}
+model_results = 
+  homicide_df |> 
+  nest(data = -city_state) |> 
+  mutate(
+    models = map(data, \(df) glm(resolution ~ victim_age + victim_sex + victim_race, 
+                             family = binomial(), data = df)),
+    tidy_models = map(models, broom::tidy)) |> 
+  select(-models, -data) |> 
+  unnest(cols = tidy_models) |> 
+  mutate(
+    OR = exp(estimate), 
+    OR_CI_upper = exp(estimate + 1.96 * std.error),
+    OR_CI_lower = exp(estimate - 1.96 * std.error)) |> 
+  filter(term == "victim_sexMale") |> 
+  select(city_state, OR, OR_CI_lower, OR_CI_upper)
+
+model_results |>
+  slice(1:5) |> 
+  knitr::kable(digits = 3)
+```
+
+```{r q1_plot}
+model_results |> 
+  mutate(city_state = fct_reorder(city_state, OR)) |> 
+  ggplot(aes(x = city_state, y = OR)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = OR_CI_lower, ymax = OR_CI_upper)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
 
 # Problem 2
 ```{r}
@@ -39,10 +102,16 @@ r_squared_boot =
     results = map(models, broom::glance)) |> 
   select(-strap, -models) |> 
   unnest(results)
+```
 
+```{r}
 r_squared_boot |> 
   ggplot(aes(x = r.squared)) + geom_density()
+```
 
+From the given plot we have made, the distribution is slightly skewed to the left (a heavy tail extending to low values) and a bit of a "shoulder", features that may be related to the frequency with large outliers are included in the bootstrap sample.
+
+```{r}
 quantile(r_squared_boot$r.squared, c(0.025, 0.975), na.rm = TRUE)
 ```
 
@@ -59,10 +128,16 @@ beta_log_boot =
   select(.id, term, estimate) |> 
   pivot_wider(names_from = term, values_from = estimate) |> 
   mutate(log_beta1_beta2 = log(prcp * tmin))
+```
 
+```{r}
 beta_log_boot |> 
   ggplot(aes(x = log_beta1_beta2)) + geom_density()
+```
 
+From the graph we made, the pattern of the distribution is shown as a obvious left-skewed distribution with a slight "shoulder". This indicates that there are multiple outliers in small value of the bootstrap appears and form this kind of distribution. 
+
+```{r}
 quantile(beta_log_boot$log_beta1_beta2, c(0.025, 0.975), na.rm = TRUE)
 ```
 
@@ -97,8 +172,10 @@ my_lm |>
   knitr::kable(digit = 3)
 birthweight |> 
   add_residuals(my_lm) |> 
-  ggplot(aes(x = bwt, y = resid)) + geom_point()
+  ggplot(aes(x = momage, y = resid)) + geom_point()
 ```
+
+The modeling of my linear model is inspired by the relation between mom's body condition - `momage` & `menarche` and family income condition - `fincome` verses the `birthweight` of the baby. So, I created a three-way multiple linear regression model to find out whether the model are sufficient enough for finding a pattern for our dependent value - `birthweight`. According to our residual plot, it seems that the distribution are not good enough since all the points are tends to cluster to the left, which is not a good residual distribution. So, the model needs improvement.
 
 ```{r}
 cv_df = 
